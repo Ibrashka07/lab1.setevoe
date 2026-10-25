@@ -6,11 +6,22 @@
 #include <sys/socket.h> // socket, bind
 #include <netinet/in.h> // sockaddr_in, in_addr, INADDR_ANY
 #include <arpa/inet.h>  // htons, htonl, inet_pton, inet_ntop
+#include <sys/types.h>   // pid_t
 
 /* Константы для настройки сокета */ 
 // define Заменяет все вхождения имени в коде на значение до компиляции
 #define SERVER_IP   "127.0.0.1"  /* IP-адрес для привязки */
-#define SERVER_PORT 8080         /* Порт для привязки */
+#define SERVER_PORT 9090         /* Порт для привязки */
+
+void print_open_fds(const char *label)
+{
+  printf("\n--- Открытые FD (%s) ---\n", label);
+
+  pid_t pid = getpid(); //pid_t-у каждого запущенного процесса (программы) есть номер — PID (Process ID). Ядро по этому номеру понимает, о каком процессе речь. getpid() - возвращает уникальный номер текущего процесса
+  char cmd[256];
+  snprintf(cmd, sizeof(cmd), "lsof -p %d 2>/dev/null", (int)pid); // snprintf - записывает результат в масив, 1-куда писать,2-сколько места есть, шаблон, что подставляем
+  system(cmd); // запускает шел и передает строку в виде команды
+}
 
 int main(void)
 {
@@ -18,7 +29,7 @@ int main(void)
      * ШАГ 1: Создание сокета
      * ============================================================
      */
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0); // создаем сокет и кладем в переменную  (домен(IPV4), тип, протокол(0 автовыбор))
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0); // создаем сокет и кладем в переменную  (домен(IPV4), тип, протокол(0 автовыбор))
     if (sockfd < 0) // >= 0(дескриптор) или -1(ошибка)
     {
         perror("socket"); //печатает в терминал сообщение об ошибке: сначала текст "socket", потом двоеточие, потом расшифровку последней ошибки из переменной errno.
@@ -69,7 +80,13 @@ int main(void)
      */
     if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) //1аргумент-наш сокет, 2какой адрес привязать(«Возьми адрес server_addr и считай его указателем на sockaddr».)sockaddr-это универсальная структура для хранения любого сетевого адреса: IPv4, IPv6, UNIX-сокетов
     {
-      perror("bind");
+      if (errno == EADDRINUSE) { // EADDRINUSE=48 порт занят
+        fprintf(stderr, "Ошибка: порт %d уже используется (EADDRINUSE, errno=%d)\n", SERVER_PORT, errno);
+      } else if (errno == EACCES) { // EACCES = 13 нет прав на порт 
+        fprintf(stderr, "Ошибка: нет прав на порт %d (EACCES, errno=%d)\n", SERVER_PORT, errno);
+      } else {
+        perror("bind");
+      }
       close(sockfd);
       return EXIT_FAILURE;
     }
@@ -85,6 +102,10 @@ int main(void)
     printf("Порт (сетевой): 0x%04X\n", ntohs(server_addr.sin_port));
     printf("IP-адрес: %s\n", ip_str);
 
+
+    print_open_fds("ДО close() — сокет должен быть в списке");
+    getchar(); // останавливает программу и ждет ввода символа
+
     /* ============================================================
      * ШАГ 6: Закрытие сокета
      * ============================================================
@@ -96,5 +117,11 @@ int main(void)
     }
     printf("\nСокет закрыт. Дескриптор %d освобождён.\n", sockfd);
 
+    /*
+    * ШАГ 8 (средний уровень): FD после close()
+    * Сокета в списке быть не должно — FD 3 освобождён.
+    */
+    print_open_fds("ПОСЛЕ close() — сокета быть не должно");
     return EXIT_SUCCESS;
 }
+
